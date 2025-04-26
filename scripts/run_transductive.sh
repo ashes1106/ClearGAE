@@ -5,7 +5,7 @@ device=$2
 [ -z "${device}" ] && device=-1
 
 
-python main_transductive_wan.py \
+python main_transductive.py \
 	--device $device \
 	--dataset $dataset \
 	--mask_rate 0.5 \

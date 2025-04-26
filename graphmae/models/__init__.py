@@ -25,6 +25,9 @@ def build_model(args):
     num_features = args.num_features
     tau = args.tau
     differ = args.differ
+    norm_enc = args.norm_enc
+    eps = args.eps
+    tokenizer_type = args.tokenizer_type
 
 
     model = PreModel(
@@ -49,5 +52,8 @@ def build_model(args):
         concat_hidden=concat_hidden,
         tau= tau,
         differ =differ,
+        norm_enc= norm_enc,
+        eps=eps,
+        tokenizer_type=tokenizer_type,
     )
     return model

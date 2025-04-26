@@ -112,6 +112,11 @@ def build_args():
 
     parser.add_argument("--tau", type=float, default=1.1)
     parser.add_argument("--differ", type=float, default=10)
+    parser.add_argument("--norm_enc", type=float, default=10)
+    parser.add_argument("--eps", type=float, default=0.3)
+    parser.add_argument("--tokenizer_type", type=str, default='gcn')
+    parser.add_argument("--norm_token", type=str, default='batchnorm')
+    
     args = parser.parse_args()
     return args
 
@@ -125,7 +130,7 @@ def softmax(x):
 def get_similarity_neigborhood(feat,A_matrix):
     #nodes = g.ndata["feat"].cpu().numpy()
     feats  = feat.cpu().numpy()
-    # 计算所有节点对的余弦相似度
+
     similarity_matrix = cosine_similarity(feats)
     #similarity_matrix = np.mean(similarity_matrix, axis=1)
     
@@ -134,7 +139,7 @@ def get_similarity_neigborhood(feat,A_matrix):
     similarity_neigbor = similarity_matrix * A_new
 
     row_sums_similarity_neigbor = np.sum(similarity_neigbor, axis=1)
-    row_sums_A = np.sum(A_new, axis=1)
+    row_sums_A = np.sum(A_new, axis=1) +1e-14
 
     distribution_neigh_similarity = row_sums_similarity_neigbor  / row_sums_A
 
@@ -143,21 +148,16 @@ def get_similarity_neigborhood(feat,A_matrix):
 def get_similarity_difference(feat,emb_epoch,A_matrix):
 
     sort_compare = []
-    #计算生成的嵌入表示中每一个节点与邻居节点的距离
-    #计算原始图中每一个节点与邻居节点的距离
-    #计算二者的KL散度
-    # softmax函数
+ 
     feats  = feat.cpu().numpy()
     emb_epoch  = emb_epoch.cpu().numpy()
     D = np.eye(A_matrix.shape[0])
     A_new = A_matrix - D
 
-    # 计算所有节点对的余弦相似度
     feat_similarity_matrix = cosine_similarity(feats) 
     emb_similarity_matrix = cosine_similarity(emb_epoch) 
 
-    #计算排序
-    # 对每一行进行操作
+
     for i in range(A_new.shape[0]):
         row_real = []
         row_generator = []
@@ -165,129 +165,64 @@ def get_similarity_difference(feat,emb_epoch,A_matrix):
             if A_new[i][j] == 1:
                 row_real.append(feat_similarity_matrix[i][j])
                 row_generator.append(emb_similarity_matrix[i][j])
-        # 对非0元素进行排序并获取排序序号
+     
         sorted_indexes_true = np.argsort(row_real)+1
         sorted_indexes_real = np.argsort(row_generator)+1
-        # 添加到列表中
-        #sorted_index_list.append(sorted_indexes + 1)  # 加1以使序号从1开始
 
-        # 计算斯皮尔曼秩相关系数
-        # 衡量两个排序的相似性
         assert len(sorted_indexes_true)==len(sorted_indexes_real)
         correlation, _ = spearmanr(sorted_indexes_true, sorted_indexes_real)
         sort_compare.append(correlation)
 
-    # 去掉值为NaN的元素
+
     sort_compare = np.array(sort_compare)
     filtered_array = sort_compare[~np.isnan(sort_compare)]
 
-    # 将过滤后的 NumPy 数组转回列表
+ 
     filtered_sort_compare = filtered_array.tolist()
     filtered_sort_compare_mean = np.mean(filtered_sort_compare)
-   # print(filtered_sort_compare)  # 输出：0.7
 
-    # 对于每个节点, 计算与其邻接节点特征的差值并应用softmax
-    # n = A_new.shape[0]  # 节点数量
-    # KL_all = []
-    # for i in range(n):
-    #     KL_line = []
-    #     for j in range(n):
-    #         if A_new[i][j] == 1:  # j 是 i 的邻居节点
-    #             diff_1 = abs(feats[i] - feats[j])
-    #             # 应用 softmax
-    #             softmax_diff = softmax(diff_1)
-    #             diff_2 = abs(emb_epoch[i] - emb_epoch[j])
-    #             softmax_diff_2 = softmax(diff_2)
-                
-    #             KL_tmp = softmax_diff_2*(np.log(diff_2/diff_1))
-    #             KL_line.append(KL_tmp)
-    #             #print(f'节点{i}和节点{j}: 差值{diff}, Softmax差值{softmax_diff}')
-    #     KL_all.append(KL_line)
-
-    # 计算矩阵的平均值
-    #KL_average = np.mean(KL_all)
     return filtered_sort_compare_mean
 
 
 def get_distance(x,y):
-         # 正则化
+    
         x =  x.reshape(-1,1)
         y =  y.reshape(-1,1)
         scaler = MinMaxScaler()
         x_scaled = scaler.fit_transform(x)
         y_scaled = scaler.fit_transform(y)
 
-        # 计算正则化后的距离
+   
         dist = distance.euclidean(x_scaled.flatten() , y_scaled.flatten() )
         return dist
 
 def plot_epoch(y_list,save_name):
 
-    # 创建数据
+
     x_list = [i for i in range(1, len(y_list)+1)]
 
-    # 绘制折线图
+ 
     plt.plot(x_list, y_list)
 
-    # 添加标题和轴标签
+
     plt.title("Plot Example")
     plt.xlabel("X-axis")
     plt.ylabel("Y-axis")
 
-    # 保存图像而不显示
     plt.savefig(save_name)
     plt.close()
 
-def calculate(A, X):
 
-    A = sp.coo_matrix(A)
-    A = A + A.T.multiply(A.T > A) - A.multiply(A.T > A)
-    rowsum = np.array(A.sum(1)).clip(min=1)
-    r_inv_sqrt = np.power(rowsum, -0.5).flatten()
-    r_mat_inv_sqrt = sp.diags(r_inv_sqrt)
-    A = A.dot(r_mat_inv_sqrt).transpose().dot(r_mat_inv_sqrt)
 
-    low = 0.5 * sp.eye(A.shape[0]) + A
-    high = 0.5 * sp.eye(A.shape[0]) - A
-    low = low.todense()
-    high = high.todense()
 
-    low_signal = np.dot(np.dot(low, low), X)
-    high_signal = np.dot(np.dot(high, high), X)
-
-    return low_signal, high_signal
-import torch
-
-def calculate_tensor(A, X):
-    device = A.device  # If your tensors are on GPU, calculations should also be made on GPU
-
-    # Assuming A is already a dense tensor, and its diagonal elements are zero
-    A = A + torch.transpose(A, 0, 1).clone().where(A > torch.transpose(A, 0, 1), torch.tensor([-1], device=device))
-
-    rowsum = torch.sum(A, axis=1).clamp(min=1)
-    r_inv_sqrt = torch.pow(rowsum, -0.5).flatten()
-    r_mat_inv_sqrt = torch.diag(r_inv_sqrt)
-
-    r_mat_inv_sqrt = r_mat_inv_sqrt.float()
-    A = A.float()
-
-    A = torch.matmul(torch.matmul(A, r_mat_inv_sqrt), torch.transpose(r_mat_inv_sqrt, 0, 1))
-
-    low = 0.5 * torch.eye(A.shape[0], device=device) + A
-    high = 0.5 * torch.eye(A.shape[0], device=device) - A
-
-    low_signal = torch.matmul(torch.matmul(low, low), X)
-    high_signal = torch.matmul(torch.matmul(high, high), X)
-
-    return low_signal, high_signal
 
 def scale_feats_tensor(x):
-    # PyTorch中的.mean()和.std()方法可以分别计算张量的平均值和标准差
+
     mean = x.mean(dim=0, keepdim=True)
     std = x.std(dim=0, keepdim=True, unbiased=False)
-    # 标准化：减去平均值，然后除以标准差
+
     x -= mean
-    x /= (std + 1e-7)  # 加上一个小的常数防止除以0
+    x /= (std + 1e-7)  
     return x
 
 def extract_indices(g):
@@ -401,16 +336,15 @@ def load_best_configs(args, path):
 
 def extract_indices(g):
     edge_idx_loop = g.adj_tensors('coo')
-    #print(edge_idx_loop[0])
+
     edge_idx_loop_tensors = [edge_idx_loop[1], edge_idx_loop[0]]
-    # 使用 stack 函数合并张量
+ 
     edge_idx_loop = torch.stack(edge_idx_loop_tensors)
-    #edge_idx_loop = edge_idx_loop.t()
-    #print(edge_idx_loop)
+
     edge_idx_no_loop = dgl.remove_self_loop(g).adj_tensors('coo')
     edge_idx_no_loop_tensors = [edge_idx_no_loop[1], edge_idx_no_loop[0]]
 
-    # 使用 stack 函数合并张量
+ 
     edge_idx_no_loop = torch.stack(edge_idx_no_loop_tensors)
     edge_idx = (edge_idx_loop, edge_idx_no_loop)
     

@@ -142,6 +142,40 @@ class GINConv(nn.Module):
             return rst
 
 
+
+
+class NonParaGINConv(nn.Module):
+    def __init__(self, eps=0, aggregator_type="sum"):
+        super().__init__()
+        self.eps = eps  # 控制自环特征权重的标量
+        self._aggregator_type = aggregator_type
+
+        # 设置聚合函数
+        if aggregator_type == 'sum':
+            self._reducer = fn.sum
+        elif aggregator_type == 'max':
+            self._reducer = fn.max
+        elif aggregator_type == 'mean':
+            self._reducer = fn.mean
+        else:
+            raise KeyError('Aggregator type {} not recognized.'.format(aggregator_type))
+
+    def forward(self, graph, feat):
+        with graph.local_scope():
+            # 定义消息传递函数
+            aggregate_fn = fn.copy_u('h', 'm')
+
+            # 将特征扩展为 (feat_src, feat_dst) 对
+            feat_src, feat_dst = expand_as_pair(feat, graph)
+
+            # 消息传递和聚合
+            graph.srcdata['h'] = feat_src
+            graph.update_all(aggregate_fn, self._reducer('m', 'neigh'))
+            rst = (1 + self.eps) * feat_dst + graph.dstdata['neigh']
+
+            return rst
+
+
 class ApplyNodeFunc(nn.Module):
     """Update the node feature hv with MLP, BN and ReLU."""
     def __init__(self, mlp, norm="batchnorm", activation="relu"):

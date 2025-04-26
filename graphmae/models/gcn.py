@@ -125,7 +125,7 @@ class GraphConv(nn.Module):
 
     def forward(self, graph, feat):
         with graph.local_scope():
-            aggregate_fn = fn.copy_src('h', 'm')
+            aggregate_fn = fn.copy_u('h', 'm')
             # if edge_weight is not None:
             #     assert edge_weight.shape[0] == graph.number_of_edges()
             #     graph.edata['_edge_weight'] = edge_weight
@@ -172,3 +172,85 @@ class GraphConv(nn.Module):
                 rst = self._activation(rst)
 
             return rst
+
+
+# class NonParaGraphConv(nn.Module):
+#     def __init__(self,
+#                  eps,
+#                  ):
+#         super().__init__()
+#         self.eps = eps        
+
+
+
+#     def forward(self, graph, feat):
+#         with graph.local_scope():
+#             aggregate_fn = fn.copy_src('h', 'm')
+#             # if edge_weight is not None:
+#             #     assert edge_weight.shape[0] == graph.number_of_edges()
+#             #     graph.edata['_edge_weight'] = edge_weight
+#             #     aggregate_fn = fn.u_mul_e('h', '_edge_weight', 'm')
+
+#             # (BarclayII) For RGCN on heterogeneous graphs we need to support GCN on bipartite.
+#             feat_src, feat_dst = expand_as_pair(feat, graph)
+#             # if self._norm in ['left', 'both']:
+#             degs = graph.out_degrees().float().clamp(min=1)
+#             norm = torch.pow(degs, -0.5)
+#             shp = norm.shape + (1,) * (feat_src.dim() - 1)
+#             norm = torch.reshape(norm, shp)
+#             feat_src = feat_src * norm
+
+#             # if self._in_feats > self._out_feats:
+#             #     # mult W first to reduce the feature size for aggregation.
+#             #     # if weight is not None:
+#             #         # feat_src = th.matmul(feat_src, weight)
+#             #     graph.srcdata['h'] = feat_src
+#             #     graph.update_all(aggregate_fn, fn.sum(msg='m', out='h'))
+#             #     rst = graph.dstdata['h']
+#             # else:
+#             # aggregate first then mult W
+#             graph.srcdata['h'] = feat_src
+#             graph.update_all(aggregate_fn, fn.sum(msg='m', out='h'))
+#             rst = graph.dstdata['h']
+
+#             # if self._norm in ['right', 'both']:
+#             degs = graph.in_degrees().float().clamp(min=1)
+#             norm = torch.pow(degs, -0.5)
+#             shp = norm.shape + (1,) * (feat_dst.dim() - 1)
+#             norm = torch.reshape(norm, shp)
+#             rst = rst * norm
+#             rst = self.eps * feat_src + rst
+        
+#             return rst
+
+class NonParaGCNConv(nn.Module):
+    def __init__(self, eps):
+        super(NonParaGCNConv, self).__init__()
+        self.eps = eps
+
+    def forward(self, graph, x):
+        with graph.local_scope():
+            # 添加自环边
+            #graph = dgl.add_self_loop(graph)
+            
+            # 计算度矩阵的平方根的倒数
+            degs = graph.out_degrees().float().clamp(min=1)  # 防止除零
+            norm = torch.pow(degs, -0.5)
+            norm = norm.to(x.device).unsqueeze(1)  # (num_nodes, 1)
+            
+            # 将归一化系数存储到节点和边上
+            graph.ndata['norm'] = norm
+            graph.apply_edges(fn.u_mul_v('norm', 'norm', 'edge_norm'))  # edge_norm = norm[u] * norm[v]
+            
+            # 消息传递
+            graph.ndata['x'] = x
+            graph.update_all(
+                fn.u_mul_e('x', 'edge_norm', 'm'),  # 消息函数：x_j * edge_norm
+                fn.sum('m', 'h')                   # 聚合函数：求和
+            )
+            
+            # 获取聚合结果
+            h = graph.ndata['h']
+            
+            # 残差连接
+            return h + x * self.eps

@@ -2,11 +2,11 @@ import logging
 import numpy as np
 from tqdm import tqdm
 import torch
-import yaml, random
-
+import yaml, random 
+import wandb
 import os
 from collections import defaultdict
-
+import json
 from graphmae.utils import (
     build_args,
     create_optimizer,
@@ -20,20 +20,32 @@ from graphmae.evaluation import node_classification_evaluation
 from graphmae.models import build_model
 import time
 import networkx as nx
-from graphmae.utils import get_similarity_neigborhood, get_distance, plot_epoch, get_similarity_difference, calculate
+from graphmae.utils import get_similarity_neigborhood, get_distance, plot_epoch, get_similarity_difference
 from graphmae.datasets.data_util import scale_feats
 from pprint import pprint
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
+def read_config(args):
+    # 加载 JSON 配置文件
+    with open(f'./config/{args.dataset}', 'r') as f:
+        config = json.load(f)
+    if config['dataset']['value']!=args.dataset:
+        ValueError("config mismatch")
+    # 对每个配置参数
+    for key, val in config.items():
+        if key in ['data','norm','task','debug','_wandb','device','repeats']:
+            continue
+        # 将值赋给 Namespace 对象
+        setattr(args, key, val['value'])
+    return args
 
-def pretrain(model, graph, feat, A, nei_simi, recon_infor_low, recon_infor_high, optimizer, max_epoch, device, scheduler, num_classes, lr_f, weight_decay_f, max_epoch_f, linear_prob, logger=None):
+def pretrain(model, graph, feat, A,  optimizer, max_epoch, device, scheduler, num_classes, lr_f, weight_decay_f, max_epoch_f, linear_prob, logger=None):
     logging.info("start training..")
     graph = graph.to(device)
     x = feat.to(device)
-    recon_infor_low = recon_infor_low.to(device)
-    recon_infor_high = recon_infor_high.to(device)
+
     # low concat high
     epoch_iter = tqdm(range(max_epoch))
 
@@ -44,7 +56,7 @@ def pretrain(model, graph, feat, A, nei_simi, recon_infor_low, recon_infor_high,
     for epoch in epoch_iter:
         model.train()
 
-        loss, loss_dict = model(graph, x, recon_infor_low, recon_infor_high,A)
+        loss, loss_dict,loss_s,loss_test,recon = model(graph, x, A)
 
         optimizer.zero_grad()
         loss.backward()
@@ -53,38 +65,12 @@ def pretrain(model, graph, feat, A, nei_simi, recon_infor_low, recon_infor_high,
             scheduler.step()
 
         epoch_iter.set_description(
-            f"# Epoch {epoch}: train_loss: {loss.item():.4f}")
+            f"# Epoch {epoch}: train_loss: {loss.item():.4f} train_2: {loss_s:.8f} train_3: {loss_test:.8f}")
         if logger is not None:
             loss_dict["lr"] = get_current_lr(optimizer)
             logger.note(loss_dict, step=epoch)
 
-        # with torch.no_grad():
-        #     emb_epoch = model.embed(graph.to(device), x.to(device))
-        #     train_neig_simi = get_similarity_neigborhood(emb_epoch,A)
 
-        # dis_com = get_distance(nei_simi,train_neig_simi)
-        # #compute the mean similarity between the neigborhood
-        # epoch_train_neig = np.mean(train_neig_simi)
-        # train_neig_list.append(epoch_train_neig)
-        # neigborhood_simi_list.append(dis_com)
-
-        # neigborhood_diff = get_similarity_difference(feat,emb_epoch,A)
-        # neigborhood_diff_list.append(neigborhood_diff)
-
-        # if (epoch + 1) % 1 == 0:
-        #     node_classification_evaluation(model, graph, x, num_classes, lr_f, weight_decay_f, max_epoch_f, device, linear_prob, mute=True)
-
-    # plot
-    #save_neig_name = '/mmu_nlp_ssd/chenge03/graph/KR/bridge_map/imgs/' + \
-     #   'neig_'+str(i)+'.png'
-    #save_dis_name = '/mmu_nlp_ssd/chenge03/graph/KR/bridge_map/imgs/' + \
-     #   'dis_'+str(i)+'.png'
-    #save_rank_name = '/mmu_nlp_ssd/chenge03/graph/KR/bridge_map/imgs/' + \
-      #  'rank_'+str(i)+'.png'
-    # plot_epoch(train_neig_list,save_neig_name)
-    # plot_epoch(neigborhood_simi_list,save_dis_name)
-    # plot_epoch(neigborhood_diff_list,save_rank_name)
-    # return best_model
     return model
 
 
@@ -95,6 +81,8 @@ def main():
     #if args.use_cfg:
     args = load_best_configs(args, "./configs.yml")
 
+    args = read_config(args)
+    print(args)
     assert args.device in range(0, 8)
     torch.cuda.set_device(args.device)
     device = torch.device("cuda:{}".format(args.device) if torch.cuda.is_available() else "cpu")
@@ -103,8 +91,6 @@ def main():
     random.seed(args.seed)
 
 
-    #device = args.device if args.device >= 0 else "cpu"
-    #seeds = args.seeds
     dataset_name = args.dataset
     max_epoch = args.max_epoch
     max_epoch_f = args.max_epoch_f
@@ -165,27 +151,20 @@ def main():
         x = graph.ndata["feat"]
         #calculate后mask低或者高
         #重构低信息 重构高信息
-        low_x, high_x = calculate(A, x)
+        #low_x, high_x = calculate(A, x)
 
         x = x.to(device)
-        low_x = torch.tensor(low_x)
-        low_x = scale_feats(low_x)
-        # x = low_x.to(device)
-        high_x = torch.tensor(high_x)
-        high_x = scale_feats(high_x)
 
-        recon_infor_low = low_x 
-        recon_infor_high = high_x 
 
         #x = torch.cat((low_x, high_x), dim=1)
-        nei_simi = get_similarity_neigborhood(x, A)
+        #nei_simi = get_similarity_neigborhood(x, A)
 
         # noise = torch.randn(x.shape)
         # noise = noise.to(x.device)
         # x = x + noise * 0.01
         start_time = time.time()
         if not load_model:
-            model = pretrain(model, graph, x, A, nei_simi,recon_infor_low, recon_infor_high, optimizer, max_epoch, device, scheduler,num_classes, lr_f, weight_decay_f, max_epoch_f, linear_prob,  logger)
+            model = pretrain(model, graph, x, A,  optimizer, max_epoch, device, scheduler,num_classes, lr_f, weight_decay_f, max_epoch_f, linear_prob,  logger)
             model = model.cpu()
         end_time = time.time()
         print("耗时: {:.2f}秒".format(end_time - start_time))
@@ -219,11 +198,8 @@ def main():
 
 
 
-
     print(f"# final_acc: {final_acc:.4f}±{final_acc_std:.4f}")
     print(f"# early-stopping_acc: {estp_acc:.4f}±{estp_acc_std:.4f}")
-
-
 
 
 if __name__ == "__main__":
@@ -232,21 +208,4 @@ if __name__ == "__main__":
     if args.debug:        
         print(args)
         main()        
-    else:
-        curPath = os.path.dirname(os.path.realpath(__file__))        
-        if args.task_type ==  "nc":
-            yaml_path = os.path.join(curPath, "sweep_nc.yaml")
-        elif args.task_type ==  "lp":
-            yaml_path = os.path.join(curPath, "sweep_lp.yaml")
-        elif args.task_type ==  "clu":
-            yaml_path = os.path.join(curPath, "sweep_cluster.yaml")            
-        else:
-            yaml_path = os.path.join(curPath, "sweep_gc.yaml")
-
-        with open(yaml_path, 'r', encoding='utf-8') as f:
-            config = f.read()
-        sweep_config = yaml.load(config, Loader=yaml.FullLoader)
-        pprint(sweep_config)
-
-        main()
 

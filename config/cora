@@ -1,0 +1,226 @@
+{
+  "lr": {
+    "desc": null,
+    "value": 0.00047
+  },
+  "eps": {
+    "desc": null,
+    "value": 0.3
+  },
+  "tau": {
+    "desc": null,
+    "value": 6.300000000000001
+  },
+  "lr_f": {
+    "desc": null,
+    "value": 0.01
+  },
+  "norm": {
+    "desc": null,
+    "value": null
+  },
+  "seed": {
+    "desc": null,
+    "value": 42
+  },
+  "debug": {
+    "desc": null,
+    "value": false
+  },
+  "_wandb": {
+    "desc": null,
+    "value": {
+      "t": {
+        "1": [
+          1,
+          5,
+          49,
+          53,
+          55,
+          76,
+          77
+        ],
+        "2": [
+          1,
+          5,
+          49,
+          53,
+          55,
+          76,
+          77
+        ],
+        "3": [
+          23,
+          37
+        ],
+        "4": "3.8.10",
+        "5": "0.15.8",
+        "8": [
+          5
+        ]
+      },
+      "framework": "torch",
+      "start_time": 1743154663.074481,
+      "cli_version": "0.15.8",
+      "is_jupyter_run": false,
+      "python_version": "3.8.10",
+      "is_kaggle_kernel": false
+    }
+  },
+  "device": {
+    "desc": null,
+    "value": 0
+  },
+  "differ": {
+    "desc": null,
+    "value": 100
+  },
+  "alpha_l": {
+    "desc": null,
+    "value": 3
+  },
+  "dataset": {
+    "desc": null,
+    "value": "cora"
+  },
+  "decoder": {
+    "desc": null,
+    "value": "gat"
+  },
+  "encoder": {
+    "desc": null,
+    "value": "gat"
+  },
+  "in_drop": {
+    "desc": null,
+    "value": 0.2
+  },
+  "logging": {
+    "desc": null,
+    "value": false
+  },
+  "loss_fn": {
+    "desc": null,
+    "value": "sce"
+  },
+  "pooling": {
+    "desc": null,
+    "value": "mean"
+  },
+  "use_cfg": {
+    "desc": null,
+    "value": false
+  },
+  "deg4feat": {
+    "desc": null,
+    "value": false
+  },
+  "norm_enc": {
+    "desc": null,
+    "value": 100000
+  },
+  "residual": {
+    "desc": null,
+    "value": false
+  },
+  "attn_drop": {
+    "desc": null,
+    "value": 0.1
+  },
+  "mask_rate": {
+    "desc": null,
+    "value": 0.70000001
+  },
+  "max_epoch": {
+    "desc": null,
+    "value": 2950
+  },
+  "num_heads": {
+    "desc": null,
+    "value": 4
+  },
+  "optimizer": {
+    "desc": null,
+    "value": "adam"
+  },
+  "scheduler": {
+    "desc": null,
+    "value": true
+  },
+  "task_type": {
+    "desc": null,
+    "value": "nc"
+  },
+  "activation": {
+    "desc": null,
+    "value": "prelu"
+  },
+  "batch_size": {
+    "desc": null,
+    "value": 32
+  },
+  "load_model": {
+    "desc": null,
+    "value": false
+  },
+  "norm_token": {
+    "desc": null,
+    "value": "batchnorm"
+  },
+  "num_hidden": {
+    "desc": null,
+    "value": 1024
+  },
+  "num_layers": {
+    "desc": null,
+    "value": 2
+  },
+  "save_model": {
+    "desc": null,
+    "value": false
+  },
+  "linear_prob": {
+    "desc": null,
+    "value": true
+  },
+  "max_epoch_f": {
+    "desc": null,
+    "value": 300
+  },
+  "replace_rate": {
+    "desc": null,
+    "value": 0
+  },
+  "warmup_steps": {
+    "desc": null,
+    "value": -1
+  },
+  "weight_decay": {
+    "desc": null,
+    "value": 0.0002
+  },
+  "concat_hidden": {
+    "desc": null,
+    "value": false
+  },
+  "num_out_heads": {
+    "desc": null,
+    "value": 1
+  },
+  "drop_edge_rate": {
+    "desc": null,
+    "value": 0
+  },
+  "negative_slope": {
+    "desc": null,
+    "value": 0.2
+  },
+  "tokenizer_type": {
+    "desc": null,
+    "value": "gcn"
+  },
+  "weight_decay_f": {
+    "desc": null,
+    "value": 0.0001
+  }
+}

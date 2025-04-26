@@ -2,6 +2,7 @@ from typing import Optional
 from itertools import chain
 from functools import partial
 
+import dgl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -10,10 +11,11 @@ from .gin import GIN
 from .gat import GAT
 from .gcn import GCN
 from .dot_gat import DotGAT
+from .non_gcn import Tokenizer
 from .loss_func import sce_loss, semi_loss
 from graphmae.utils import create_norm, drop_edge
 
-from graphmae.utils import  calculate_tensor, scale_feats_tensor,extract_indices
+from graphmae.utils import  scale_feats_tensor,extract_indices
 
 #CUDA_LAUNCH_BLOCKING=1
 
@@ -106,8 +108,11 @@ class PreModel(nn.Module):
             negative_slope: float,
             tau: float,
             differ:float,
+            eps:float,
+            norm_enc:float,
             residual: bool,
             norm: Optional[str],
+            tokenizer_type: Optional[str],
             mask_rate: float = 0.3,
             encoder_type: str = "gat",
             decoder_type: str = "gat",
@@ -132,6 +137,8 @@ class PreModel(nn.Module):
         self.act_fn = nn.ReLU()
         self.tau = tau
         self.differ = differ
+        self.norm_enc=norm_enc
+        self.eps=eps
 
         assert num_hidden % nhead == 0
         assert num_hidden % nhead_out == 0
@@ -186,6 +193,11 @@ class PreModel(nn.Module):
         )
         
         self.enc_mask_token = nn.Parameter(torch.zeros(1, in_dim))
+        self.std_expander = nn.Sequential(nn.Linear(num_hidden, num_hidden),
+                                          nn.PReLU())
+
+        self.std_expander_token = nn.Sequential(nn.Linear(in_dim, num_hidden),
+                                          nn.PReLU())
         if concat_hidden:
             self.encoder_to_decoder = nn.Linear(dec_in_dim * num_layers, dec_in_dim, bias=False)
         else:
@@ -194,6 +206,9 @@ class PreModel(nn.Module):
         # * setup loss function
         self.criterion = self.setup_loss_fn(loss_fn, alpha_l)
         self.difference = nn.KLDivLoss(reduction="batchmean", log_target=True)
+        self.tokenizer_nonpara = Tokenizer(in_dim, num_layers, self.eps, JK='last', gnn_type=tokenizer_type,norm=create_norm(norm))
+
+
     
     @property
     def output_hidden_dim(self):
@@ -221,7 +236,7 @@ class PreModel(nn.Module):
 
         return e_softmax
     
-    def encoding_mask_noise(self, g, x,recon_infor_low, recon_infor_high, mask_rate=0.3):
+    def encoding_mask_noise(self, g, x, mask_rate=0.3):
         num_nodes = g.num_nodes()
 
 
@@ -278,15 +293,15 @@ class PreModel(nn.Module):
 
 
 
-    def forward(self, g, x,recon_infor_low, recon_infor_high , A):
+    def forward(self, g, x, A):
         # ---- attribute reconstruction ----
-        loss = self.mask_attr_prediction(g, x,recon_infor_low, recon_infor_high, A)
+        loss,loss_s,loss_test,recon = self.mask_attr_prediction(g, x, A)
         loss_item = {"loss": loss.item()}
-        return loss, loss_item
+        return loss, loss_item,loss_s,loss_test,recon
     
-    def mask_attr_prediction(self, g, x,recon_infor_low, recon_infor_high, A):
+    def mask_attr_prediction(self, g, x, A):
 
-        pre_use_g, use_x, (mask_nodes, keep_nodes) = self.encoding_mask_noise(g, x,recon_infor_low, recon_infor_high, self._mask_rate)
+        pre_use_g, use_x, (mask_nodes, keep_nodes) = self.encoding_mask_noise(g, x, self._mask_rate)
 
         if self._drop_edge_rate > 0:
             use_g, masked_edges = drop_edge(pre_use_g, self._drop_edge_rate, return_edges=True)
@@ -294,6 +309,9 @@ class PreModel(nn.Module):
             use_g = pre_use_g
                                     
         enc_rep, all_hidden = self.encoder(use_g, use_x, return_hidden=True)
+
+
+        g_tokens = self.tokenizer_nonpara(g,x).detach()
         if self._concat_hidden:
             enc_rep = torch.cat(all_hidden, dim=1)
 
@@ -301,11 +319,6 @@ class PreModel(nn.Module):
         rep = self.encoder_to_decoder(enc_rep)
         #rep2 = self.encoder_to_decoder(enc_rep)
 
-        # 首先我们将两个tensor连接在一起
-        #concatenated = torch.cat((mask_nodes_low, mask_nodes_high))
-
-        # 然后我们移除重复的元素
-        #union = torch.unique(concatenated)
         
 
         if self._decoder_type not in ("mlp", "linear"):
@@ -321,89 +334,48 @@ class PreModel(nn.Module):
             #recon1 = self.decoder(pre_use_g, rep)
             #recon2 = self.decoder(pre_use_g, rep)
             recon = self.decoder(pre_use_g, rep)
-        
-        #reconstruct low and high (different mask ratio)
-        #x_init = x[mask_nodes]
-        # x_init_low = recon_infor_low[mask_nodes_low]
-        # x_init_high = recon_infor_high[mask_nodes_high]
-        # x_rec1 = recon1[mask_nodes_low]
-        # x_rec2 = recon2[mask_nodes_high]
 
-
-        # loss1 = self.criterion(x_rec1, x_init_low)
-        # loss2 = self.criterion(x_rec2, x_init_high)
-        # loss = loss1 + loss2
-        # loss = loss1
-
-        #x_init =  recon_infor_low + recon_infor_high
-        #x_init = x_init[mask_nodes]
-        #recon = recon[mask_nodes]
-        #x_rec = 0.5* recon1 + 0.5* recon2
         x_init = x[mask_nodes]
         recon_new = recon[mask_nodes]
         loss = self.criterion(recon_new, x_init)
 
-        #
-        #recon_num = recon.cpu().numpy()
-        
-        #reconstruct low + reconstruct high + reconstruct low+high
-        #loss1_low = semi_loss(x_init_low, x_rec1)
-        #loss2_high = semi_loss(x_init_high, x_rec2)
-       
-        #loss12_f = semi_loss(torch.cat((recon_infor_low,recon_infor_high), 1), torch.cat((recon1,recon2), 1))
-        #loss12_f = semi_loss(x_init, x_rec)
-        #loss_e = loss1_low + loss2_high + loss12_f
+
     
-        #info_loss = 0.5 *loss1_low.mean() + 0.5 *loss2_high.mean()  
-
-        #node - graph
-        # x_rec1 = recon1[mask_nodes_low]
-        # x_rec2 = recon2[mask_nodes_high]
-        # c = self.act_fn(torch.mean(recon_infor_low[mask_nodes_low], dim=0))
-        # c_x = c.expand_as(x_rec1).contiguous()
-
-        # c2 = self.act_fn(torch.mean(recon_infor_high[mask_nodes_high], dim=0))
-        # c2_x = c.expand_as(x_rec2).contiguous()
-
-        # loss1 = self.criterion(x_rec1, c_x)
-        # loss2 = self.criterion(x_rec2, c2_x)
-        # loss = loss1 + loss2
-        # loss = loss1
-
-        #self.encoder 
-        #enc_rep_all, all_hidden_all = self.encoder(g, x, return_hidden=True)
-
-        #x_init_low = enc_rep_all[mask_nodes_low]
-        #x_init_high = recon_infor_high[mask_nodes_high]
-        #x_rec1 = recon1[mask_nodes_low]
-        #x_rec2 = recon2[mask_nodes_high]
-
-
-        #loss1 = self.criterion(x_rec1, x_init_low)
-        #loss2 = self.criterion(x_rec2, x_init_high)
-        ##loss = loss1 + loss2
-        #loss = loss1
-
-        #先试一试原始重构
-        #x_init = x[concatenated]
-        #x_rec = recon[concatenated]
-        #loss = self.criterion(x_rec, x_init)
-
-        #x_init_all = recon_infor_low * 0.5 + recon_infor_high * 0.5
-        #x_init = x_init_all[mask_nodes_low]
-        #x_rec = recon[mask_nodes_low]
-        #loss = self.criterion(x_rec, x_init)
-
-
-        #增加一个loss计算邻居pair对之间的距离
         edge_idx = extract_indices(g)
         dif_init = self.edge_distribution_high(edge_idx, x, self.tau)
         dif_recon = self.edge_distribution_high(edge_idx, recon, self.tau)
         #edge_idx = edge_idx.to(x.device)
         loss_s = self.difference(dif_recon,dif_init )
-        loss = loss+ self.differ *loss_s
 
-        return loss
+
+        #rank
+
+        #covariance loss
+        neighbor_mean = self.neighbor_diff(g,enc_rep)
+        enc_rep_mean = enc_rep - enc_rep.mean(dim=0)
+        neighbor_mean_mean = neighbor_mean - neighbor_mean.mean(dim=0)
+    
+     
+        cov_x = (enc_rep_mean.T @ enc_rep_mean) / (enc_rep_mean.size(0) - 1)
+        #cov_y = (neighbor_mean_mean.T @ neighbor_mean_mean) / (neighbor_mean_mean.size(0) - 1)
+        con_xy = (enc_rep_mean.T @ neighbor_mean_mean) / (enc_rep_mean.size(0) - 1)
+    
+ 
+        mask = ~torch.eye(cov_x.size(0), dtype=torch.bool, device=cov_x.device)
+        loss_x = cov_x[mask].pow(2).mean()
+        #loss_y = cov_y[mask].pow(2).mean()
+        loss_xy = con_xy.pow(2).mean()
+        loss_neig = loss_x  + loss_xy
+
+
+        loss = loss+ self.differ *loss_s +self.norm_enc *loss_neig
+        #loss_neig = 0.0
+        #loss_s = 0.0
+        #loss = loss+ self.differ *loss_s 
+
+        #loss = loss+ self.norm_enc *loss_neig
+
+        return loss,self.differ*loss_s,self.norm_enc *loss_neig,recon
                         
     def embed(self, g, x):
         rep = self.encoder(g, x)
@@ -416,3 +388,56 @@ class PreModel(nn.Module):
     @property
     def dec_params(self):
         return chain(*[self.encoder_to_decoder.parameters(), self.decoder.parameters()])
+
+    def std_loss(self,z,isenc=True):
+        if isenc:
+            z = self.std_expander(z)
+            #z = z
+        else:
+            z = self.std_expander_token(z)
+        # z = F.normalize(z, dim=1)
+        # std_z = torch.sqrt(z.var(dim=0) + 1e-4)
+        # std_loss = F.relu(1 - std_z)
+        #std_loss = z.mean(dim=0).pow(2).mean()
+        std_loss = z
+
+        return std_loss
+
+    def neighbor_diff(self,graph,z):
+        new_graph = graph
+      
+        new_graph.ndata['feat'] = z
+      
+        new_graph = dgl.remove_self_loop(new_graph)
+
+    
+        new_graph.update_all(
+            dgl.function.copy_u('feat', 'm'),
+            dgl.function.mean('m', 'neigh_mean')
+        )
+
+   
+        degrees = new_graph.out_degrees().float()
+        neighbor_means = new_graph.ndata['neigh_mean']
+        neighbor_means = torch.where(
+            (degrees == 0).unsqueeze(1),
+            torch.zeros_like(neighbor_means),
+            neighbor_means
+        )
+        return neighbor_means
+
+    
+
+
+    def reduce_loss(self, z_a,z_b):
+        # normalize repr. along the batch dimension
+        z_a_norm = (z_a - z_a.mean(0)) / z_a.std(0) # NxD
+        z_b_norm = (z_b - z_b.mean(0)) / z_b.std(0) # NxD
+        # cross-correlation matrix
+        c = mm(z_a_norm.T, z_b_norm) / N # DxD
+        # loss
+        c_diff = (c - eye(D)).pow(2) # DxD
+        # multiply off-diagonal elems of c_diff by lambda
+        #off_diagonal(c_diff).mul_(lambda)
+        loss = c_diff.sum()
+        return loss
